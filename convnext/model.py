@@ -87,8 +87,8 @@ class Downsampling(hk.Module):
 class ConvNeXt(hk.Module):
     def __init__(
         self,
-        pool=partial(hk.AvgPool, window_shape=7, strides=7, padding="SAME"),
         head=partial(hk.Linear, 1000),
+        pool=None,
         norm=LayerNorm,
         act=jax.nn.gelu,
         widths=[96, 192, 384, 384],
@@ -136,8 +136,12 @@ class ConvNeXt(hk.Module):
         logits = self.norm(logits, is_training)
         for layer in self.layers:
             logits = layer(logits, is_training)
-        if self.pool is not None:
-            logits = self.pool()(logits)
+        if self.pool is None:
+            if self.head is not None:
+                window = logits.shape[-2]
+                logits = hk.avg_pool(logits, window, window, padding="SAME")
+        else:
+            self.pool()(logits)
         if self.head is not None:
             logits = logits.reshape(batchc, -1)
             logits = self.head()(logits)
