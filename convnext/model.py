@@ -74,11 +74,12 @@ class Block(hk.Module):
 class Downsampling(hk.Module):
     def __init__(self, width, norm=LayerNorm, name=None):
         super().__init__(name=name)
+        which_conv = nf.Conv2D if norm is None else hk.Conv2D
+        self.conv = which_conv(width, kernel_shape=2, stride=2)
         self.norm = NormDispatcher(norm)
-        self.width = width
 
     def __call__(self, inputs, is_training):
-        logits = hk.Conv2D(self.width, kernel_shape=2, stride=2)(inputs)
+        logits = self.conv(inputs)
         logits = self.norm(logits, is_training)
         return logits
 
@@ -100,7 +101,8 @@ class ConvNeXt(hk.Module):
         assert (
             len(expand_factors) == len(widths) == len(depths)
         ), "widths, depths, and expansions must all describe the same number of stages"
-        self.stem = hk.Conv2D(widths[0], kernel_shape=4, stride=4, name="stem_conv")
+        which_conv = nf.Conv2D if norm is None else hk.Conv2D
+        self.stem = which_conv(widths[0], kernel_shape=4, stride=4, name="stem_conv")
         self.norm = NormDispatcher(norm, name="stem_norm")
         self.pool = pool
         self.head = head
