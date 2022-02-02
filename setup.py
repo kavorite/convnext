@@ -8,5 +8,5 @@ setup(
     author="kavorite",
     author_email="kavorite@gmail.com",
     license="MIT",
-    packages=["convnext"],
+    package_dir={"": "convnext"},
 )
