@@ -3,6 +3,7 @@ from functools import partial
 
 import haiku as hk
 import jax
+import jax.numpy as jnp
 
 from . import nf
 
@@ -58,7 +59,7 @@ class Block(hk.Module):
 
     def __call__(self, inputs, is_training):
         drop = is_training and jax.random.uniform(hk.next_rng_key()) >= self.sdrate
-        b_l = jax.lax.cond(drop, lambda: 1.0, lambda: 0.0)
+        b_l = jnp.where(drop, 1.0, 0.0)
         logits = self.which_conv(
             self.ch_oup,
             kernel_shape=self.kernel_shape,
