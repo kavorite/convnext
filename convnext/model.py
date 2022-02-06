@@ -37,6 +37,26 @@ class NormDispatcher(hk.Module):
         return logits
 
 
+class StochDepth(hk.Module):
+    """Batchwise Dropout used in EfficientNet, optionally sans rescaling."""
+
+    def __init__(self, drop_rate, scale_by_keep=False, name=None):
+        super().__init__(name=name)
+        self.drop_rate = drop_rate
+        self.scale_by_keep = scale_by_keep
+
+    def __call__(self, x, is_training) -> jnp.ndarray:
+        if not is_training:
+            return x
+        batch_size = x.shape[0]
+        r = jax.random.uniform(hk.next_rng_key(), [batch_size, 1, 1, 1], dtype=x.dtype)
+        keep_prob = 1.0 - self.drop_rate
+        binary_tensor = jnp.floor(keep_prob + r)
+        if self.scale_by_keep:
+            x = x / keep_prob
+        return x * binary_tensor
+
+
 class Block(hk.Module):
     def __init__(
         self,
@@ -44,7 +64,7 @@ class Block(hk.Module):
         hidden_channels,
         kernel_shape=7,
         norm=LayerNorm,
-        act=jax.nn.gelu,
+        act=jax.nn.relu,
         sdrate=0.2,
         name=None,
     ):
@@ -58,8 +78,6 @@ class Block(hk.Module):
         self.act = act
 
     def __call__(self, inputs, is_training):
-        drop = is_training and jax.random.uniform(hk.next_rng_key()) >= self.sdrate
-        b_l = jnp.where(drop, 1.0, 0.0)
         logits = self.which_conv(
             self.ch_oup,
             kernel_shape=self.kernel_shape,
@@ -69,7 +87,8 @@ class Block(hk.Module):
         logits = self.which_conv(_channels(self.ch_hdn), kernel_shape=1)(logits)
         logits = self.act(logits)
         logits = self.which_conv(_channels(self.ch_oup), kernel_shape=1)(logits)
-        return inputs + b_l * logits
+        logits = StochDepth(self.sdrate)(logits, is_training)
+        return self.act(inputs + logits)
 
 
 class Downsampling(hk.Module):
@@ -89,9 +108,9 @@ class ConvNeXt(hk.Module):
     def __init__(
         self,
         head=partial(hk.Linear, 1000),
-        pool=None,
+        pool=hk.avg_pool,
         norm=LayerNorm,
-        act=jax.nn.gelu,
+        act=jax.nn.relu,
         widths=[96, 192, 384, 384],
         expand_factors=[4.0] * 4,
         depths=[1, 2, 6, 3],
@@ -107,9 +126,8 @@ class ConvNeXt(hk.Module):
         self.norm = NormDispatcher(norm, name="stem_norm")
         self.pool = pool
         self.head = head
-        self.layers = []
+        self.blocks = []
         block_count = sum(depths)
-        block_index = 0
 
         for i, (width, depth, expansion) in enumerate(
             zip(widths, depths, expand_factors)
@@ -118,32 +136,28 @@ class ConvNeXt(hk.Module):
                 downsampling = Downsampling(
                     width, norm=norm, name=f"stage_{i}_downsampling"
                 )
-                self.layers.append(downsampling)
+                self.blocks.append(downsampling)
             for j in range(depth):
                 block = Block(
                     width,
                     width * expansion,
                     norm=norm,
                     act=act,
-                    sdrate=sdrate * block_index / block_count,
+                    sdrate=sdrate * len(self.blocks) / block_count,
                     name=f"stage_{i}_block_{j}",
                 )
-                self.layers.append(block)
-                block_index += 1
+                self.blocks.append(block)
 
     def __call__(self, inputs, is_training):
         batchc = inputs.shape[0]
         logits = self.stem(inputs)
         logits = self.norm(logits, is_training)
-        for layer in self.layers:
+        for layer in self.blocks:
             logits = layer(logits, is_training)
-        if self.pool is None:
-            if self.head is not None:
-                window = logits.shape[-2]
-                logits = hk.avg_pool(logits, window, window, padding="SAME")
-        else:
-            self.pool()(logits)
-        if self.head is not None:
+        window = strides = (1, *logits.shape[-3:-1], 1)
+        if self.pool is not None:
+            logits = self.pool(logits, window, strides, padding="SAME")
             logits = logits.reshape(batchc, -1)
+        if self.head is not None:
             logits = self.head()(logits)
         return logits
