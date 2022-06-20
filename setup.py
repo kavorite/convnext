@@ -6,7 +6,14 @@ setup(
     description="ConvNeXt for the 2020s in JAX",
     url="https://github.com/kavorite/convnext",
     author="kavorite",
-    author_email="kavorite@gmail.com",
     license="MIT",
-    package_dir={"": "convnext"},
+    package_dir={"": "src"},
+    packages=["convnext"],
+    install_requires=[
+        "chex>=0.1.0",
+        "dm_haiku>=0.0.5",
+        "jax>=0.2.27",
+        "optax>=0.0.9",
+        "tqdm>=4.62.3",
+    ],
 )
